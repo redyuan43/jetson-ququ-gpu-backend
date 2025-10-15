@@ -1,0 +1,84 @@
+# Git子项目（独立的GitHub项目）
+ququ/
+DeepResearch/
+
+# 模型缓存目录（大文件，约2GB）
+modelscope_cache/
+
+# 输出目录
+outputs/
+
+# Python缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 日志文件
+*.log
+*.log.*
+logs/
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# IDE配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker相关
+.dockerignore
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.backup
+~*
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 大型二进制文件
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+*.gguf
+*.h5
+*.pb
+
+# 音频/视频文件
+*.wav
+*.mp3
+*.mp4
+*.avi
+*.mov
+
+# 数据文件
+*.csv
+*.json.gz
+*.parquet

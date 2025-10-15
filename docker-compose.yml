@@ -1,0 +1,315 @@
+services:
+  jetson-deepresearch:
+    image: jetson_minicpm_v:latest
+    container_name: deepresearch-runner
+    runtime: nvidia
+    network_mode: host
+    ipc: host
+    privileged: true
+
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=8.7
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+      - LLAMA_CUDA=1
+      - GGML_CUDA=1
+      - LD_LIBRARY_PATH=/workspace/llama.cpp/build/bin:$LD_LIBRARY_PATH
+      # DeepResearch specific environment
+      - TORCHDYNAMO_VERBOSE=1
+      - TORCHDYNAMO_DISABLE=1
+      - NCCL_IB_TC=16
+      - NCCL_IB_SL=5
+      - NCCL_IB_GID_INDEX=3
+      - NCCL_SOCKET_IFNAME=eth
+      - NCCL_DEBUG=INFO
+      - NCCL_IB_HCA=mlx5
+      - NCCL_IB_TIMEOUT=22
+      - NCCL_IB_QPS_PER_CONNECTION=8
+      - NCCL_MIN_NCHANNELS=4
+      - NCCL_NET_PLUGIN=none
+      - GLOO_SOCKET_IFNAME=eth0
+      - QWEN_DOC_PARSER_USE_IDP=false
+      - QWEN_IDP_ENABLE_CSI=false
+      - NLP_WEB_SEARCH_ONLY_CACHE=false
+      - NLP_WEB_SEARCH_ENABLE_READPAGE=false
+      - NLP_WEB_SEARCH_ENABLE_SFILTER=false
+      - QWEN_SEARCH_ENABLE_CSI=false
+      - SPECIAL_CODE_MODE=false
+      - PYTHONDONTWRITEBYTECODE=1
+      # Model configuration
+      - MODEL_PATH=/workspace/models/Alibaba-NLP_Tongyi-DeepResearch-30B-A3B-Q4_K_M.gguf
+      - DATASET=example
+      - OUTPUT_PATH=/workspace/outputs
+      - ROLLOUT_COUNT=3
+      - TEMPERATURE=0.85
+      - PRESENCE_PENALTY=1.1
+      - MAX_WORKERS=8
+
+    volumes:
+      # Main directories
+      - /data/sensor-voice:/workspace
+      - /data/sensor-voice/models:/workspace/models
+      - /data/sensor-voice/sensor-voice/llama.cpp:/workspace/llama.cpp
+      - /data/deepresearch/DeepResearch:/workspace/DeepResearch
+      - /data/deepresearch/outputs:/workspace/outputs
+      # Additional mounts
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev:/dev
+      - /etc/localtime:/etc/localtime:ro
+
+    working_dir: /workspace/DeepResearch
+
+    # Keep container running
+    command: >
+      bash -c "
+        echo '🚀 DeepResearch Environment Ready!' &&
+        echo 'Available commands:' &&
+        echo '  python inference/run_multi_react.py --help' &&
+        echo '  ./test_deepresearch.sh' &&
+        echo '  ls -la /workspace/models/' &&
+        echo '' &&
+        echo '🔧 Environment configured for Q4 model:' &&
+        echo '  Model: /workspace/models/Alibaba-NLP_Tongyi-DeepResearch-30B-A3B-Q4_K_M.gguf' &&
+        echo '  LLAMA: /workspace/llama.cpp/build/bin/llama-cli' &&
+        echo '' &&
+        echo '💡 Quick test:' &&
+        echo '  export LD_LIBRARY_PATH=/workspace/llama.cpp/build/bin:\$LD_LIBRARY_PATH' &&
+        echo '  /workspace/llama.cpp/build/bin/llama-cli --model /workspace/models/Alibaba-NLP_Tongyi-DeepResearch-30B-A3B-Q4_K_M.gguf --help' &&
+        tail -f /dev/null
+      "
+
+    stdin_open: true
+    tty: true
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # Memory and CPU settings optimized for Jetson AGX Orin
+    mem_limit: 64g
+    cpus: 8
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import torch; exit(0 if torch.cuda.is_available() else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # llama.cpp server service for API access
+  llama-server:
+    image: jetson_minicpm_v:latest
+    container_name: llama-server-deepresearch
+    runtime: nvidia
+    network_mode: host
+    depends_on:
+      - jetson-deepresearch
+
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - LLAMA_CUDA=1
+      - GGML_CUDA=1
+      - LD_LIBRARY_PATH=/workspace/llama.cpp/build/bin:$LD_LIBRARY_PATH
+
+    volumes:
+      - /data/sensor-voice:/workspace
+      - /data/sensor-voice/models:/workspace/models
+      - /data/sensor-voice/sensor-voice/llama.cpp:/workspace/llama.cpp
+
+    working_dir: /workspace/llama.cpp
+
+    # Start llama.cpp server with DeepResearch Q4 model
+    command: >
+      bash -c "
+        echo '🌐 Starting llama.cpp server...' &&
+        export LD_LIBRARY_PATH=/workspace/llama.cpp/build/bin:\$LD_LIBRARY_PATH &&
+        ./build/bin/llama-server \
+          --model /workspace/models/Alibaba-NLP_Tongyi-DeepResearch-30B-A3B-Q4_K_M.gguf \
+          --ctx-size 8192 \
+          --n-gpu-layers 35 \
+          --port 8080 \
+          --host 0.0.0.0 \
+          --threads 8 \
+          --batch-size 512 \
+          --verbose \
+          --print-benchmark
+      "
+
+    stdin_open: true
+    tty: true
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    profiles:
+      - server
+
+  # DeepResearch runner service
+  deepresearch-runner:
+    image: jetson_minicpm_v:latest
+    container_name: deepresearch-inference
+    runtime: nvidia
+    network_mode: host
+    depends_on:
+      - jetson-deepresearch
+
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - LLAMA_CUDA=1
+      - GGML_CUDA=1
+      - LD_LIBRARY_PATH=/workspace/llama.cpp/build/bin:$LD_LIBRARY_PATH
+      # DeepResearch environment
+      - TORCHDYNAMO_VERBOSE=1
+      - TORCHDYNAMO_DISABLE=1
+      - PYTHONDONTWRITEBYTECODE=1
+      # Model config
+      - MODEL_PATH=/workspace/models/Alibaba-NLP_Tongyi-DeepResearch-30B-A3B-Q4_K_M.gguf
+      - DATASET=example
+      - OUTPUT_PATH=/workspace/outputs
+      - ROLLOUT_COUNT=1
+      - TEMPERATURE=0.85
+      - PRESENCE_PENALTY=1.1
+      - MAX_WORKERS=4
+
+    volumes:
+      - /data/sensor-voice:/workspace
+      - /data/sensor-voice/models:/workspace/models
+      - /data/sensor-voice/sensor-voice/llama.cpp:/workspace/llama.cpp
+      - /data/deepresearch/DeepResearch:/workspace/DeepResearch
+      - /data/deepresearch/outputs:/workspace/outputs
+
+    working_dir: /workspace/DeepResearch
+
+    # Run DeepResearch inference
+    command: >
+      bash -c "
+        echo '🧠 Running DeepResearch inference...' &&
+        export LD_LIBRARY_PATH=/workspace/llama.cpp/build/bin:\$LD_LIBRARY_PATH &&
+        echo 'Testing llama.cpp with Q4 model...' &&
+        /workspace/llama.cpp/build/bin/llama-cli \
+          --model /workspace/models/Alibaba-NLP_Tongyi-DeepResearch-30B-A3B-Q4_K_M.gguf \
+          --ctx-size 1024 \
+          --n-gpu-layers 35 \
+          --threads 8 \
+          --predict 50 \
+          --temp 0.85 \
+          --prompt '请介绍一下阿里巴巴的WebAgent技术' \
+          --no-display-prompt &&
+        echo '' &&
+        echo '🚀 Running DeepResearch multi-react inference...' &&
+        python3 inference/run_multi_react.py \
+          --model /workspace/models/Alibaba-NLP_Tongyi-DeepResearch-30B-A3B-Q4_K_M.gguf \
+          --dataset example \
+          --output /workspace/outputs \
+          --temperature 0.85 \
+          --presence_penalty 1.1 \
+          --max_workers 4 \
+          --roll_out_count 1 \
+          --total_splits 1 \
+          --worker_split 1
+      "
+
+    stdin_open: true
+    tty: true
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    profiles:
+      - inference
+
+  # QuQu Backend Service - GPU加速FunASR语音识别服务
+  ququ-backend:
+    image: jetson_minicpm_v:latest
+    container_name: ququ-backend
+    runtime: nvidia
+    network_mode: host
+
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTHONDONTWRITEBYTECODE=1
+      # Ollama配置（容器使用host网络，直接访问localhost）
+      - OLLAMA_BASE_URL=http://localhost:11434
+      - OLLAMA_MODEL=gpt-oss:20b
+      # 服务配置
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+      - SERVER_WORKERS=1
+
+    volumes:
+      - /data/deepresearch/ququ_backend:/workspace/ququ_backend
+      - /data/deepresearch/ququ:/workspace/ququ
+      # FunASR模型缓存目录（避免每次重启都重新下载）
+      - /data/deepresearch/modelscope_cache:/root/.cache/modelscope
+
+    working_dir: /workspace/ququ_backend
+
+    command: >
+      bash -c "
+        echo '🚀 Starting QuQu Backend Server...' &&
+        echo 'GPU加速FunASR语音识别服务' &&
+        echo 'API: http://192.168.100.38:8000' &&
+        echo 'Docs: http://192.168.100.38:8000/docs' &&
+        echo '' &&
+        python3 server.py
+      "
+
+    stdin_open: true
+    tty: true
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+networks:
+  default:
+    driver: bridge
+
+volumes:
+  models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/sensor-voice/models

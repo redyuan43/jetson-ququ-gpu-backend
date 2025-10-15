@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(huggingface-cli download:*)",
+      "Bash(/data/sensor-voice/sensor-voice/llama.cpp/build/bin/llama-cli:*)",
+      "Bash(export:*)",
+      "Read(//data/sensor-voice/sensor-voice/llama.cpp/**)",
+      "Read(//data/sensor-voice/models/**)",
+      "Bash(chmod:*)",
+      "Bash(/data/deepresearch/diagnose.sh:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker exec:*)",
+      "Bash(xargs:*)",
+      "Bash(grep:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
