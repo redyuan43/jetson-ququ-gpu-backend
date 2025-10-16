@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 funasr_server: Optional[FunASRServer] = None
 ollama_client: Optional[OllamaClient] = None
 
+# 热词缓存
+_hotwords_cache: Optional[str] = None
+_hotwords_file_mtime: float = 0
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -96,6 +100,73 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ==================== 辅助函数 ====================
+
+def load_hotwords() -> str:
+    """
+    加载热词文件
+    自动检测文件更新并重新加载
+    Returns:
+        str: 空格分隔的热词字符串
+    """
+    global _hotwords_cache, _hotwords_file_mtime
+
+    hotwords_file = Path(__file__).parent / "hotwords.txt"
+
+    if not hotwords_file.exists():
+        logger.warning(f"热词文件不存在: {hotwords_file}")
+        return ""
+
+    try:
+        # 检查文件是否更新
+        current_mtime = hotwords_file.stat().st_mtime
+
+        if _hotwords_cache is None or current_mtime > _hotwords_file_mtime:
+            # 读取热词文件
+            with open(hotwords_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            # 过滤注释和空行，提取热词
+            hotwords = []
+            for line in lines:
+                line = line.strip()
+                # 跳过空行和注释
+                if line and not line.startswith('#'):
+                    hotwords.append(line)
+
+            # 用空格连接所有热词
+            _hotwords_cache = ' '.join(hotwords)
+            _hotwords_file_mtime = current_mtime
+
+            logger.info(f"热词已加载: {len(hotwords)}个词")
+            logger.debug(f"热词内容: {_hotwords_cache[:200]}...")
+
+        return _hotwords_cache
+
+    except Exception as e:
+        logger.error(f"加载热词文件失败: {str(e)}")
+        return ""
+
+
+def merge_hotwords(user_hotwords: str = "") -> str:
+    """
+    合并用户提供的热词和系统热词
+    Args:
+        user_hotwords: 用户提供的热词（空格分隔）
+    Returns:
+        str: 合并后的热词字符串
+    """
+    system_hotwords = load_hotwords()
+
+    if user_hotwords:
+        # 合并用户热词和系统热词
+        all_hotwords = f"{system_hotwords} {user_hotwords}".strip()
+    else:
+        all_hotwords = system_hotwords
+
+    return all_hotwords
 
 
 # ==================== 数据模型 ====================
@@ -173,7 +244,7 @@ async def transcribe_audio(
     audio: UploadFile = File(..., description="音频文件"),
     use_vad: bool = Form(True, description="是否使用VAD"),
     use_punc: bool = Form(True, description="是否添加标点"),
-    hotword: str = Form("", description="热词")
+    hotword: str = Form("", description="热词（空格分隔，自动加载hotwords.txt）")
 ):
     """
     语音识别接口
@@ -205,11 +276,16 @@ async def transcribe_audio(
         logger.info(f"收到转录请求: {audio.filename}, 大小: {len(content)} bytes")
 
         # 执行转录
+        # 合并系统热词和用户热词
+        merged_hotwords = merge_hotwords(hotword)
+
         options = {
             "use_vad": use_vad,
             "use_punc": use_punc,
-            "hotword": hotword
+            "hotword": merged_hotwords
         }
+
+        logger.info(f"使用热词数: {len(merged_hotwords.split()) if merged_hotwords else 0}")
 
         result = funasr_server.transcribe_audio(str(temp_audio_path), options)
 
@@ -307,11 +383,16 @@ async def transcribe_and_optimize(
         logger.info(f"收到一体化请求: {audio.filename}")
 
         # 1. 语音识别
+        # 合并系统热词和用户热词
+        merged_hotwords = merge_hotwords(hotword)
+
         options = {
             "use_vad": use_vad,
             "use_punc": use_punc,
-            "hotword": hotword
+            "hotword": merged_hotwords
         }
+
+        logger.info(f"一体化处理 - 使用热词数: {len(merged_hotwords.split()) if merged_hotwords else 0}")
 
         asr_result = funasr_server.transcribe_audio(str(temp_audio_path), options)
 
@@ -362,6 +443,50 @@ async def transcribe_and_optimize(
 async def health_check():
     """健康检查"""
     return {"status": "healthy", "message": "QuQu Backend is running"}
+
+
+@app.get("/api/hotwords")
+async def get_hotwords():
+    """
+    获取当前加载的热词列表
+
+    Returns:
+        热词信息
+    """
+    hotwords_str = load_hotwords()
+    hotwords_list = hotwords_str.split() if hotwords_str else []
+
+    return {
+        "success": True,
+        "count": len(hotwords_list),
+        "hotwords": hotwords_list,
+        "hotwords_string": hotwords_str
+    }
+
+
+@app.post("/api/hotwords/reload")
+async def reload_hotwords():
+    """
+    重新加载热词文件
+
+    Returns:
+        重新加载结果
+    """
+    global _hotwords_cache, _hotwords_file_mtime
+
+    # 清空缓存强制重新加载
+    _hotwords_cache = None
+    _hotwords_file_mtime = 0
+
+    hotwords_str = load_hotwords()
+    hotwords_list = hotwords_str.split() if hotwords_str else []
+
+    return {
+        "success": True,
+        "message": "热词已重新加载",
+        "count": len(hotwords_list),
+        "hotwords": hotwords_list[:20]  # 只返回前20个作为预览
+    }
 
 
 # ==================== 主程序 ====================

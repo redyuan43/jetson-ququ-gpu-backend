@@ -1,0 +1,60 @@
+# AI大模型相关热词列表
+# 每行一个词或短语
+
+# 谷歌模型
+Gemma
+Google Gemma
+谷歌Gemma
+
+# 阿里模型
+千问
+通义千问
+Qwen
+阿里千问
+
+# 其他常见AI模型
+GPT
+ChatGPT
+Claude
+LLaMA
+Llama
+Mistral
+Mixtral
+DeepSeek
+智谱
+GLM
+文心一言
+百川
+讯飞星火
+
+# 技术术语
+大模型
+语言模型
+LLM
+推理
+微调
+LoRA
+量化
+部署
+调校
+提示词
+Prompt
+
+# 框架和工具
+PyTorch
+TensorFlow
+Hugging Face
+Transformers
+vLLM
+Ollama
+LangChain
+
+# 硬件相关
+GPU
+CUDA
+Jetson
+AGX Orin
+显存
+FP16
+INT8
+量化
