@@ -37,7 +37,6 @@ HOTWORD_VARIANTS = {
     "X.com": ["x点com", "x.com", "x dot com", "x com"],
     "Twitter": ["推特", "twitter", "twiter"],
     "YouTube": ["youtube", "油管", "you tube", "优兔"],
-    "GitHub": ["github", "git hub", "吉特哈布"],
     "LinkedIn": ["linkedin", "领英", "linked in"],
 
     # 技术框架
@@ -50,6 +49,8 @@ HOTWORD_VARIANTS = {
     "AGX Orin": ["agx orin", "欧林", "奥林"],
 
     # 工具
+    "Git": ["gate", "deit", "盖特", "git"],
+    "GitHub": ["github", "git hub", "吉特哈布", "gay hub"],
     "Ollama": ["欧拉马", "ollama", "o拉马"],
     "Docker": ["多克", "docker", "道克"],
     "Hugging Face": ["hugging face", "哈金费斯", "拥抱脸"],

@@ -5,6 +5,8 @@
 # 常用词汇应放在前面，确保优先被包含在热词对照表中
 
 # === 常用工具和平台（优先级最高）===
+Git
+GitHub
 Home Assistant
 Docker
 Kubernetes

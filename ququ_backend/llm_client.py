@@ -58,10 +58,10 @@ class OllamaClient:
                     json={
                         "model": self.model,
                         "messages": [
-                            {"role": "system", "content": "你是一个语言理解大师，非常会理解用户的语言表达。并且能够很好的总结和优化文本。"},
+                            {"role": "system", "content": "你是专业的ASR文本纠错助手，严格按照用户要求纠正专有名词。"},
                             {"role": "user", "content": prompt}
                         ],
-                        "temperature": 0.7,
+                        "temperature": 0.3,
                         "stream": False,
                         "think": False,
                         "options": {
@@ -123,26 +123,17 @@ class OllamaClient:
 """
 
         prompts = {
-            "optimize": f"""你的任务：纠正语音识别中的专有名词错误。
+            "optimize": f"""请纠正以下语音识别结果中的专有名词错误，并删除口头语。
 
-【重要规则】
-1. **优先查对照表**：如果原文的词在"专有名词对照表"中，必须替换为对照表的正确形式
-2. **不要过度推断**：只纠正明确错误的专有名词，不要改变其他内容
-3. **删除口头语**：去掉"嗯"、"啊"、"那个"等语气词
-4. **保持原意**：不改变人称、语气和句式
-
-【常见专有名词参考】
-AI模型: Gemma, Qwen, Qwen3, Qwen2.5, DeepSeek, ChatGPT, GPT, Claude, LLaMA
-技术工具: PyTorch, TensorFlow, CUDA, Ollama, Docker, Hugging Face, Home Assistant
-社交平台: Facebook, Reddit, Twitter, YouTube, GitHub, LinkedIn
+规则：
+1. 如果专有名词对照表中有匹配项，必须使用对照表的正确形式
+2. 只修改明显错误的专有名词，不改变其他内容
+3. 删除"嗯"、"啊"、"那个"等口头语
+4. 保持原句的人称、语气和句式结构
 {hotwords_section}
-【示例】
-原文："我想使用千万二点五和deep sik大模型"
-纠正："我想使用Qwen2.5和DeepSeek大模型"
+常见专有名词：Gemma, Qwen, Qwen2.5, Qwen3, DeepSeek, ChatGPT, GPT, Claude, PyTorch, TensorFlow, Docker, Git, GitHub, Home Assistant
 
-原文：{text}
-
-请直接输出纠正后的文本，不要包含任何前缀或格式标记。""",
+文本：{text}""",
 
             "format": f"""请将以下文本格式化为正式的书面语：
 1. 保持原意不变
