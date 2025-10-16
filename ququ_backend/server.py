@@ -23,6 +23,7 @@ import uvicorn
 # 导入自定义模块
 from funasr_gpu import FunASRServer
 from llm_client import OllamaClient
+from hotwords_with_variants import format_hotwords_for_llm
 
 # 配置日志
 logging.basicConfig(
@@ -403,15 +404,22 @@ async def transcribe_and_optimize(
 
         # 2. 文本优化
         if optimize_mode != "none":
+            # 格式化热词为LLM易读的格式（包含常见误识别变体）
+            hotwords_list = merged_hotwords.split() if merged_hotwords else []
+            hotwords_formatted = format_hotwords_for_llm(hotwords_list, max_words=20)
+
             llm_result = await ollama_client.optimize_text(
                 text=recognized_text,
-                mode=optimize_mode
+                mode=optimize_mode,
+                hotwords_context=hotwords_formatted if hotwords_formatted else None
             )
 
+            # 简单决策：LLM成功就用LLM结果，失败就用ASR原文
             if llm_result["success"]:
                 optimized_text = llm_result["optimized_text"]
+                logger.info(f"文本优化成功，原文长度: {len(recognized_text)}, 优化后长度: {len(optimized_text)}")
             else:
-                logger.warning("文本优化失败，使用原始识别文本")
+                logger.warning(f"文本优化失败，使用原始识别文本: {llm_result.get('error')}")
                 optimized_text = recognized_text
         else:
             optimized_text = recognized_text

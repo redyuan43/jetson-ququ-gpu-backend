@@ -36,7 +36,8 @@ class OllamaClient:
         self.timeout = 60.0
         logger.info(f"初始化Ollama客户端: {self.base_url}, 模型: {self.model}")
 
-    async def optimize_text(self, text: str, mode: str = "optimize", custom_prompt: Optional[str] = None) -> Dict[str, Any]:
+    async def optimize_text(self, text: str, mode: str = "optimize", custom_prompt: Optional[str] = None,
+                           hotwords_context: Optional[str] = None) -> Dict[str, Any]:
         """
         使用LLM优化文本
 
@@ -49,7 +50,7 @@ class OllamaClient:
             包含优化结果的字典
         """
         try:
-            prompt = self._build_prompt(text, mode, custom_prompt)
+            prompt = self._build_prompt(text, mode, custom_prompt, hotwords_context)
 
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
@@ -57,11 +58,15 @@ class OllamaClient:
                     json={
                         "model": self.model,
                         "messages": [
-                            {"role": "system", "content": "你是一个专业的文本编辑助手，擅长优化和润色中文文本。"},
+                            {"role": "system", "content": "你是一个语言理解大师，非常会理解用户的语言表达。并且能够很好的总结和优化文本。"},
                             {"role": "user", "content": prompt}
                         ],
                         "temperature": 0.7,
-                        "stream": False
+                        "stream": False,
+                        "think": False,
+                        "options": {
+                            "num_predict": 512
+                        }
                     }
                 )
 
@@ -101,22 +106,31 @@ class OllamaClient:
                 "original_text": text
             }
 
-    def _build_prompt(self, text: str, mode: str, custom_prompt: Optional[str] = None) -> str:
+    def _build_prompt(self, text: str, mode: str, custom_prompt: Optional[str] = None,
+                      hotwords_context: Optional[str] = None) -> str:
         """构建优化提示词"""
         if custom_prompt:
             return f"{custom_prompt}\n\n原文：\n{text}"
 
+        # 准备热词对照表
+        hotwords_section = ""
+        if hotwords_context:
+            hotwords_section = f"{hotwords_context}"
+
         prompts = {
-            "optimize": f"""请优化以下语音识别文本，完成这些任务：
-1. 删除口头禅和无意义的词语（如"嗯"、"啊"、"那个"等）
-2. 修正明显的口误和语法错误
-3. 保持原意不变，使表达更流畅自然
-4. 如果有明显的自我纠正（如"周三开会，不对，是周四"），只保留正确的部分
+            "optimize": f"""纠正语音识别错误，理解用户真实意图。
 
-原文：
-{text}
+用户是科技工作者，经常谈论AI模型、技术工具、社交平台等专有名词，但语音识别常出错。
 
-请直接输出优化后的文本，不要添加任何说明或注释。""",
+任务：
+1. 理解句子整体含义和主题（谈AI模型？谈社交媒体？）
+2. 找出拼写奇怪、发音相似的词，结合上下文判断应该是哪个专有名词
+3. 纠正专有名词，删除口头语（嗯、啊、那个等）
+4. 保持句子原意和结构
+
+原文：{text}
+
+直接输出纠正后的文本：""",
 
             "format": f"""请将以下文本格式化为正式的书面语：
 1. 保持原意不变

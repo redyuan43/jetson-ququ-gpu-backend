@@ -258,7 +258,7 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       # Ollama配置（容器使用host网络，直接访问localhost）
       - OLLAMA_BASE_URL=http://localhost:11434
-      - OLLAMA_MODEL=gpt-oss:20b
+      - OLLAMA_MODEL=gemma3:4b
       # 服务配置
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8000
