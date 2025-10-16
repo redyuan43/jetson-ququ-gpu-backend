@@ -15,10 +15,11 @@ from typing import Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+import json as json_module
 
 # 导入自定义模块
 from funasr_gpu import FunASRServer
@@ -205,7 +206,9 @@ async def root():
         "endpoints": {
             "asr_transcribe": "/api/asr/transcribe",
             "asr_transcribe_and_optimize": "/api/asr/transcribe-and-optimize",
+            "asr_transcribe_and_optimize_stream": "/api/asr/transcribe-and-optimize-stream",
             "asr_transcribe_and_translate": "/api/asr/transcribe-and-translate",
+            "asr_transcribe_and_translate_stream": "/api/asr/transcribe-and-translate-stream",
             "llm_optimize": "/api/llm/optimize",
             "llm_translate": "/api/llm/translate",
             "status": "/api/status",
@@ -497,6 +500,142 @@ async def transcribe_and_optimize(
             pass
 
 
+@app.post("/api/asr/transcribe-and-optimize-stream")
+async def transcribe_and_optimize_stream(
+    audio: UploadFile = File(..., description="音频文件"),
+    use_vad: bool = Form(True),
+    use_punc: bool = Form(True),
+    hotword: str = Form(""),
+    optimize_mode: str = Form("optimize", description="优化模式")
+):
+    """
+    流式接口：语音识别 + 文本优化（分阶段输出）
+
+    使用Server-Sent Events (SSE)格式返回，客户端可以实时接收每个阶段的结果：
+    - 阶段1: 开始处理
+    - 阶段2: ASR识别完成
+    - 阶段3: LLM优化完成
+    - 阶段4: 处理完成
+
+    Args:
+        audio: 音频文件
+        use_vad: 是否使用VAD
+        use_punc: 是否添加标点
+        hotword: 热词
+        optimize_mode: 优化模式
+
+    Returns:
+        SSE流式响应
+
+    客户端示例：
+        const eventSource = new EventSource('/api/asr/transcribe-and-optimize-stream');
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            console.log(data.stage, data);
+        };
+    """
+    global funasr_server, ollama_client
+
+    if not funasr_server or not funasr_server.initialized:
+        raise HTTPException(status_code=503, detail="FunASR服务未就绪")
+
+    if not ollama_client:
+        raise HTTPException(status_code=503, detail="Ollama客户端未初始化")
+
+    # 先读取音频内容（在generate_stream外部）
+    audio_content = await audio.read()
+    audio_filename = audio.filename
+
+    # 保存临时音频文件
+    temp_dir = tempfile.mkdtemp()
+    temp_audio_path = Path(temp_dir) / audio_filename
+
+    async def generate_stream():
+        """生成流式响应"""
+        try:
+            # 写入音频文件
+            with open(temp_audio_path, "wb") as f:
+                f.write(audio_content)
+
+            logger.info(f"收到流式请求: {audio_filename}")
+
+            # 阶段1: 开始处理
+            yield f"data: {json_module.dumps({'stage': 'start', 'message': '开始处理音频', 'timestamp': asyncio.get_event_loop().time()}, ensure_ascii=False)}\n\n"
+
+            # 阶段2: 语音识别
+            merged_hotwords = merge_hotwords(hotword)
+            options = {
+                "use_vad": use_vad,
+                "use_punc": use_punc,
+                "hotword": merged_hotwords
+            }
+
+            logger.info(f"流式处理 - 使用热词数: {len(merged_hotwords.split()) if merged_hotwords else 0}")
+
+            asr_result = funasr_server.transcribe_audio(str(temp_audio_path), options)
+
+            if not asr_result["success"]:
+                yield f"data: {json_module.dumps({'stage': 'error', 'error': asr_result.get('error', '转录失败')}, ensure_ascii=False)}\n\n"
+                return
+
+            recognized_text = asr_result["text"]
+
+            # 输出ASR结果
+            yield f"data: {json_module.dumps({'stage': 'asr_complete', 'text': recognized_text, 'duration': asr_result.get('duration', 0), 'timestamp': asyncio.get_event_loop().time()}, ensure_ascii=False)}\n\n"
+
+            logger.info(f"ASR识别完成: {recognized_text[:50]}...")
+
+            # 阶段3: 文本优化
+            if optimize_mode != "none":
+                yield f"data: {json_module.dumps({'stage': 'optimizing', 'message': '正在优化文本'}, ensure_ascii=False)}\n\n"
+
+                hotwords_list = merged_hotwords.split() if merged_hotwords else []
+                hotwords_formatted = format_hotwords_for_llm(hotwords_list, max_words=50)
+
+                llm_result = await ollama_client.optimize_text(
+                    text=recognized_text,
+                    mode=optimize_mode,
+                    hotwords_context=hotwords_formatted if hotwords_formatted else None
+                )
+
+                if llm_result["success"]:
+                    optimized_text = llm_result["optimized_text"]
+                    logger.info(f"LLM优化完成: {optimized_text[:50]}...")
+                else:
+                    logger.warning(f"文本优化失败，使用原始文本: {llm_result.get('error')}")
+                    optimized_text = recognized_text
+            else:
+                optimized_text = recognized_text
+
+            # 输出优化结果
+            yield f"data: {json_module.dumps({'stage': 'optimize_complete', 'text': optimized_text, 'timestamp': asyncio.get_event_loop().time()}, ensure_ascii=False)}\n\n"
+
+            # 阶段4: 完成
+            yield f"data: {json_module.dumps({'stage': 'done', 'message': '处理完成', 'asr_text': recognized_text, 'optimized_text': optimized_text, 'timestamp': asyncio.get_event_loop().time()}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            logger.error(f"流式处理失败: {str(e)}")
+            yield f"data: {json_module.dumps({'stage': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+
+        finally:
+            # 清理临时文件
+            try:
+                temp_audio_path.unlink()
+                Path(temp_dir).rmdir()
+            except Exception as cleanup_error:
+                logger.warning(f"清理临时文件失败: {str(cleanup_error)}")
+
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # 禁用nginx缓冲
+        }
+    )
+
+
 @app.post("/api/asr/transcribe-and-translate")
 async def transcribe_and_translate(
     audio: UploadFile = File(..., description="音频文件"),
@@ -601,6 +740,132 @@ async def transcribe_and_translate(
             Path(temp_dir).rmdir()
         except:
             pass
+
+
+@app.post("/api/asr/transcribe-and-translate-stream")
+async def transcribe_and_translate_stream(
+    audio: UploadFile = File(..., description="音频文件"),
+    use_vad: bool = Form(True),
+    use_punc: bool = Form(True),
+    hotword: str = Form(""),
+    source_lang: str = Form("中文", description="源语言"),
+    target_lang: str = Form("英文", description="目标语言")
+):
+    """
+    流式接口：语音识别 + 智能翻译（分阶段输出）
+
+    使用Server-Sent Events (SSE)格式返回，客户端可以实时接收每个阶段的结果：
+    - 阶段1: 开始处理
+    - 阶段2: ASR识别完成
+    - 阶段3: 正在翻译
+    - 阶段4: 翻译完成
+    - 阶段5: 处理完成
+
+    Args:
+        audio: 音频文件
+        use_vad: 是否使用VAD
+        use_punc: 是否添加标点
+        hotword: 热词
+        source_lang: 源语言（默认：中文）
+        target_lang: 目标语言（默认：英文）
+
+    Returns:
+        SSE流式响应
+    """
+    global funasr_server, ollama_client
+
+    if not funasr_server or not funasr_server.initialized:
+        raise HTTPException(status_code=503, detail="FunASR服务未就绪")
+
+    if not ollama_client:
+        raise HTTPException(status_code=503, detail="Ollama客户端未初始化")
+
+    # 先读取音频内容（在generate_stream外部）
+    audio_content = await audio.read()
+    audio_filename = audio.filename
+
+    # 保存临时音频文件
+    temp_dir = tempfile.mkdtemp()
+    temp_audio_path = Path(temp_dir) / audio_filename
+
+    async def generate_stream():
+        """生成流式响应"""
+        try:
+            # 写入音频文件
+            with open(temp_audio_path, "wb") as f:
+                f.write(audio_content)
+
+            logger.info(f"收到流式翻译请求: {audio_filename}, {source_lang} -> {target_lang}")
+
+            # 阶段1: 开始处理
+            yield f"data: {json_module.dumps({'stage': 'start', 'message': '开始处理音频', 'timestamp': asyncio.get_event_loop().time()}, ensure_ascii=False)}\n\n"
+
+            # 阶段2: 语音识别
+            merged_hotwords = merge_hotwords(hotword)
+            options = {
+                "use_vad": use_vad,
+                "use_punc": use_punc,
+                "hotword": merged_hotwords
+            }
+
+            logger.info(f"流式翻译处理 - 使用热词数: {len(merged_hotwords.split()) if merged_hotwords else 0}")
+
+            asr_result = funasr_server.transcribe_audio(str(temp_audio_path), options)
+
+            if not asr_result["success"]:
+                yield f"data: {json_module.dumps({'stage': 'error', 'error': asr_result.get('error', '转录失败')}, ensure_ascii=False)}\n\n"
+                return
+
+            recognized_text = asr_result["text"]
+
+            # 输出ASR结果
+            yield f"data: {json_module.dumps({'stage': 'asr_complete', 'text': recognized_text, 'duration': asr_result.get('duration', 0), 'timestamp': asyncio.get_event_loop().time()}, ensure_ascii=False)}\n\n"
+
+            logger.info(f"ASR识别完成: {recognized_text[:50]}...")
+
+            # 阶段3: 智能翻译
+            yield f"data: {json_module.dumps({'stage': 'translating', 'message': f'正在翻译 ({source_lang} → {target_lang})'}, ensure_ascii=False)}\n\n"
+
+            translate_result = await ollama_client.translate_from_asr(
+                text=recognized_text,
+                source_lang=source_lang,
+                target_lang=target_lang
+            )
+
+            if translate_result["success"]:
+                translated_text = translate_result["translated_text"]
+                logger.info(f"翻译完成: {translated_text[:50]}...")
+            else:
+                logger.warning(f"翻译失败，使用原始文本: {translate_result.get('error')}")
+                translated_text = recognized_text
+
+            # 输出翻译结果
+            yield f"data: {json_module.dumps({'stage': 'translate_complete', 'text': translated_text, 'timestamp': asyncio.get_event_loop().time()}, ensure_ascii=False)}\n\n"
+
+            # 阶段4: 完成
+            yield f"data: {json_module.dumps({'stage': 'done', 'message': '处理完成', 'asr_text': recognized_text, 'translated_text': translated_text, 'source_lang': source_lang, 'target_lang': target_lang, 'timestamp': asyncio.get_event_loop().time()}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            logger.error(f"流式翻译处理失败: {str(e)}")
+            yield f"data: {json_module.dumps({'stage': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+
+        finally:
+            # 清理临时文件
+            try:
+                temp_audio_path.unlink()
+                Path(temp_dir).rmdir()
+            except Exception as cleanup_error:
+                logger.warning(f"清理临时文件失败: {str(cleanup_error)}")
+
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # 禁用nginx缓冲
+        }
+    )
 
 
 @app.get("/api/health")

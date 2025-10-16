@@ -276,20 +276,22 @@ class FunASRServer:
             if options:
                 default_options.update(options)
 
-            # 执行语音识别
+            # 执行语音识别（使用suppress_stdout避免FunASR的输出干扰）
             if default_options["use_vad"]:
-                vad_result = self.vad_model.generate(
-                    input=audio_path, batch_size_s=default_options["batch_size_s"]
-                )
+                with suppress_stdout():
+                    vad_result = self.vad_model.generate(
+                        input=audio_path, batch_size_s=default_options["batch_size_s"]
+                    )
                 logger.info("VAD处理完成")
 
-            # 执行ASR识别
-            asr_result = self.asr_model.generate(
-                input=audio_path,
-                batch_size_s=default_options["batch_size_s"],
-                hotword=default_options["hotword"],
-                cache={},
-            )
+            # 执行ASR识别（使用suppress_stdout避免FunASR的输出干扰）
+            with suppress_stdout():
+                asr_result = self.asr_model.generate(
+                    input=audio_path,
+                    batch_size_s=default_options["batch_size_s"],
+                    hotword=default_options["hotword"],
+                    cache={},
+                )
 
             # 提取识别文本
             if isinstance(asr_result, list) and len(asr_result) > 0:

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuQu Backend 流式API测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .upload-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            text-align: center;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .progress {
+            margin: 20px 0;
+        }
+        .stage {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border-left: 4px solid;
+            animation: fadeIn 0.3s;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .stage.start {
+            background-color: #e3f2fd;
+            border-color: #2196F3;
+        }
+        .stage.asr_complete {
+            background-color: #f3e5f5;
+            border-color: #9C27B0;
+        }
+        .stage.optimizing {
+            background-color: #fff3e0;
+            border-color: #FF9800;
+        }
+        .stage.optimize_complete {
+            background-color: #e8f5e9;
+            border-color: #4CAF50;
+        }
+        .stage.done {
+            background-color: #e0f2f1;
+            border-color: #009688;
+        }
+        .stage.error {
+            background-color: #ffebee;
+            border-color: #f44336;
+        }
+        .stage-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .stage-content {
+            font-family: monospace;
+            font-size: 14px;
+            color: #555;
+        }
+        .final-result {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+        }
+        .result-label {
+            font-weight: bold;
+            color: #666;
+            margin-top: 10px;
+        }
+        .result-text {
+            padding: 10px;
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 QuQu Backend 流式API测试</h1>
+
+        <div class="upload-section">
+            <h3>上传音频文件</h3>
+            <input type="file" id="audioFile" accept="audio/*">
+            <br><br>
+            <button id="uploadBtn" onclick="uploadAudio()">开始转录</button>
+        </div>
+
+        <div class="progress" id="progress" style="display: none;">
+            <h3>处理进度：</h3>
+            <div id="stages"></div>
+        </div>
+
+        <div class="final-result" id="finalResult" style="display: none;">
+            <h3>📊 最终结果</h3>
+            <div class="result-label">ASR识别结果：</div>
+            <div class="result-text" id="asrText"></div>
+            <div class="result-label">LLM优化结果：</div>
+            <div class="result-text" id="optimizedText"></div>
+        </div>
+    </div>
+
+    <script>
+        const stageEmojis = {
+            'start': '🚀',
+            'asr_complete': '🎤',
+            'optimizing': '⚙️',
+            'optimize_complete': '✨',
+            'done': '✅',
+            'error': '❌'
+        };
+
+        const stageTitles = {
+            'start': '开始处理',
+            'asr_complete': 'ASR识别完成',
+            'optimizing': '正在优化',
+            'optimize_complete': 'LLM优化完成',
+            'done': '处理完成',
+            'error': '处理错误'
+        };
+
+        async function uploadAudio() {
+            const fileInput = document.getElementById('audioFile');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert('请先选择音频文件！');
+                return;
+            }
+
+            // 重置界面
+            document.getElementById('progress').style.display = 'block';
+            document.getElementById('stages').innerHTML = '';
+            document.getElementById('finalResult').style.display = 'none';
+            document.getElementById('uploadBtn').disabled = true;
+
+            // 准备表单数据
+            const formData = new FormData();
+            formData.append('audio', file);
+            formData.append('use_vad', 'true');
+            formData.append('use_punc', 'true');
+            formData.append('hotword', '');
+            formData.append('optimize_mode', 'optimize');
+
+            try {
+                // 发送请求并处理SSE流
+                const response = await fetch('http://localhost:8000/api/asr/transcribe-and-optimize-stream', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataStr = line.substring(6);
+                            try {
+                                const data = JSON.parse(dataStr);
+                                addStage(data);
+                            } catch (e) {
+                                console.error('JSON解析错误:', e, dataStr);
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                console.error('请求错误:', error);
+                addStage({
+                    stage: 'error',
+                    error: error.message
+                });
+            } finally {
+                document.getElementById('uploadBtn').disabled = false;
+            }
+        }
+
+        function addStage(data) {
+            const stage = data.stage;
+            const stagesDiv = document.getElementById('stages');
+
+            const stageDiv = document.createElement('div');
+            stageDiv.className = `stage ${stage}`;
+
+            const emoji = stageEmojis[stage] || '⚪';
+            const title = stageTitles[stage] || stage;
+
+            let content = '';
+
+            if (stage === 'start') {
+                content = data.message || '开始处理音频';
+            } else if (stage === 'asr_complete') {
+                content = `识别文本: ${data.text}\n音频时长: ${data.duration.toFixed(2)}秒`;
+            } else if (stage === 'optimizing') {
+                content = data.message || '正在优化文本...';
+            } else if (stage === 'optimize_complete') {
+                content = `优化文本: ${data.text}`;
+            } else if (stage === 'done') {
+                content = data.message || '处理完成！';
+                // 显示最终结果
+                document.getElementById('finalResult').style.display = 'block';
+                document.getElementById('asrText').textContent = data.asr_text;
+                document.getElementById('optimizedText').textContent = data.optimized_text;
+            } else if (stage === 'error') {
+                content = `错误: ${data.error}`;
+            }
+
+            stageDiv.innerHTML = `
+                <div class="stage-title">${emoji} ${title}</div>
+                <div class="stage-content">${content}</div>
+            `;
+
+            stagesDiv.appendChild(stageDiv);
+
+            // 自动滚动到底部
+            stageDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    </script>
+</body>
+</html>
