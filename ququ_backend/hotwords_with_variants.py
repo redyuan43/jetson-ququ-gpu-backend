@@ -53,6 +53,8 @@ HOTWORD_VARIANTS = {
     "Ollama": ["欧拉马", "ollama", "o拉马"],
     "Docker": ["多克", "docker", "道克"],
     "Hugging Face": ["hugging face", "哈金费斯", "拥抱脸"],
+    "Home Assistant": ["home system", "home assistant", "homeassistant", "霍姆系统", "家庭助手", "home assist"],
+    "Kubernetes": ["k8s", "酷伯奈特斯", "库伯奈特斯", "kubernetes"],
 }
 
 

@@ -1,12 +1,22 @@
 # AI大模型相关热词列表
 # 每行一个词或短语
+#
+# 注意：热词顺序会影响LLM优化效果
+# 常用词汇应放在前面，确保优先被包含在热词对照表中
 
-# 谷歌模型
+# === 常用工具和平台（优先级最高）===
+Home Assistant
+Docker
+Kubernetes
+PyTorch
+TensorFlow
+
+# === 谷歌模型 ===
 Gemma
 Google Gemma
 谷歌Gemma
 
-# 阿里模型
+# === 阿里模型 ===
 千问
 千问3
 Qwen
@@ -15,7 +25,7 @@ Qwen2.5
 通义千问
 阿里千问
 
-# 其他常见AI模型
+# === 其他常见AI模型 ===
 GPT
 ChatGPT
 Claude
@@ -30,7 +40,7 @@ GLM
 百川
 讯飞星火
 
-# 技术术语
+# === 技术术语 ===
 大模型
 语言模型
 LLM
@@ -43,9 +53,7 @@ LoRA
 提示词
 Prompt
 
-# 框架和工具
-PyTorch
-TensorFlow
+# === 框架和工具 ===
 Hugging Face
 Transformers
 vLLM

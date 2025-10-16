@@ -186,6 +186,13 @@ class OptimizeRequest(BaseModel):
     custom_prompt: Optional[str] = None
 
 
+class TranslateRequest(BaseModel):
+    """文本翻译请求"""
+    text: str
+    source_lang: str = "中文"
+    target_lang: str = "英文"
+
+
 # ==================== API端点 ====================
 
 @app.get("/")
@@ -196,8 +203,11 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "endpoints": {
-            "asr": "/api/asr/transcribe",
-            "llm": "/api/llm/optimize",
+            "asr_transcribe": "/api/asr/transcribe",
+            "asr_transcribe_and_optimize": "/api/asr/transcribe-and-optimize",
+            "asr_transcribe_and_translate": "/api/asr/transcribe-and-translate",
+            "llm_optimize": "/api/llm/optimize",
+            "llm_translate": "/api/llm/translate",
             "status": "/api/status",
             "docs": "/docs"
         }
@@ -342,6 +352,46 @@ async def optimize_text(request: OptimizeRequest):
         raise HTTPException(status_code=500, detail=result.get("error", "文本优化失败"))
 
 
+@app.post("/api/llm/translate")
+async def translate_text(request: TranslateRequest):
+    """
+    文本翻译接口
+
+    Args:
+        request: 包含text, source_lang, target_lang的请求
+
+    Returns:
+        翻译后的文本
+
+    示例:
+        POST /api/llm/translate
+        {
+            "text": "你好世界",
+            "source_lang": "中文",
+            "target_lang": "英文"
+        }
+    """
+    global ollama_client
+
+    if not ollama_client:
+        raise HTTPException(status_code=503, detail="Ollama客户端未初始化")
+
+    logger.info(f"收到翻译请求: {request.source_lang} -> {request.target_lang}, 长度={len(request.text)}")
+
+    result = await ollama_client.translate_text(
+        text=request.text,
+        source_lang=request.source_lang,
+        target_lang=request.target_lang
+    )
+
+    if result["success"]:
+        logger.info(f"翻译成功: {request.source_lang} -> {request.target_lang}")
+        return JSONResponse(content=result)
+    else:
+        logger.error(f"翻译失败: {result.get('error')}")
+        raise HTTPException(status_code=500, detail=result.get("error", "翻译失败"))
+
+
 @app.post("/api/asr/transcribe-and-optimize")
 async def transcribe_and_optimize(
     audio: UploadFile = File(..., description="音频文件"),
@@ -406,7 +456,7 @@ async def transcribe_and_optimize(
         if optimize_mode != "none":
             # 格式化热词为LLM易读的格式（包含常见误识别变体）
             hotwords_list = merged_hotwords.split() if merged_hotwords else []
-            hotwords_formatted = format_hotwords_for_llm(hotwords_list, max_words=20)
+            hotwords_formatted = format_hotwords_for_llm(hotwords_list, max_words=50)
 
             llm_result = await ollama_client.optimize_text(
                 text=recognized_text,
@@ -436,6 +486,112 @@ async def transcribe_and_optimize(
         raise
     except Exception as e:
         logger.error(f"一体化请求处理失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        # 清理临时文件
+        try:
+            temp_audio_path.unlink()
+            Path(temp_dir).rmdir()
+        except:
+            pass
+
+
+@app.post("/api/asr/transcribe-and-translate")
+async def transcribe_and_translate(
+    audio: UploadFile = File(..., description="音频文件"),
+    use_vad: bool = Form(True),
+    use_punc: bool = Form(True),
+    hotword: str = Form(""),
+    source_lang: str = Form("中文", description="源语言"),
+    target_lang: str = Form("英文", description="目标语言")
+):
+    """
+    一体化接口：语音识别 + 智能翻译（优化版）
+
+    处理流程（性能优化，2步完成）：
+    1. FunASR语音识别 → 中文文本
+    2. LLM智能翻译 → 理解真实意图 + 纠正专有名词 + 翻译成英文（一步完成）
+
+    性能对比：
+    - 旧版：ASR(~2s) + 优化(~3s) + 翻译(~3s) = ~8秒
+    - 新版：ASR(~2s) + 智能翻译(~3-4s) = ~5-6秒 ⚡
+
+    Args:
+        audio: 音频文件
+        use_vad: 是否使用VAD
+        use_punc: 是否添加标点
+        hotword: 热词
+        source_lang: 源语言（默认：中文）
+        target_lang: 目标语言（默认：英文）
+
+    Returns:
+        识别和智能翻译后的结果
+    """
+    global funasr_server, ollama_client
+
+    if not funasr_server or not funasr_server.initialized:
+        raise HTTPException(status_code=503, detail="FunASR服务未就绪")
+
+    if not ollama_client:
+        raise HTTPException(status_code=503, detail="Ollama客户端未初始化")
+
+    # 保存临时音频文件
+    temp_dir = tempfile.mkdtemp()
+    temp_audio_path = Path(temp_dir) / audio.filename
+
+    try:
+        # 写入音频文件
+        content = await audio.read()
+        with open(temp_audio_path, "wb") as f:
+            f.write(content)
+
+        logger.info(f"收到语音翻译请求: {audio.filename}, {source_lang} -> {target_lang}")
+
+        # 1. 语音识别
+        merged_hotwords = merge_hotwords(hotword)
+        options = {
+            "use_vad": use_vad,
+            "use_punc": use_punc,
+            "hotword": merged_hotwords
+        }
+
+        asr_result = funasr_server.transcribe_audio(str(temp_audio_path), options)
+
+        if not asr_result["success"]:
+            raise HTTPException(status_code=500, detail=asr_result.get("error", "转录失败"))
+
+        recognized_text = asr_result["text"]
+        logger.info(f"识别成功: {recognized_text[:100]}...")
+
+        # 2. ASR智能翻译（优化+翻译一步完成，提升速度）
+        translate_result = await ollama_client.translate_from_asr(
+            text=recognized_text,
+            source_lang=source_lang,
+            target_lang=target_lang
+        )
+
+        if translate_result["success"]:
+            translated_text = translate_result["translated_text"]
+            logger.info(f"ASR智能翻译成功: {source_lang} -> {target_lang}")
+        else:
+            logger.warning(f"翻译失败，返回原文: {translate_result.get('error')}")
+            translated_text = recognized_text
+
+        return JSONResponse(content={
+            "success": True,
+            "asr_result": asr_result,
+            "recognized_text": recognized_text,
+            "translated_text": translated_text,
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "mode": "asr_smart_translate"  # 标识使用了智能翻译模式
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"语音翻译请求处理失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
