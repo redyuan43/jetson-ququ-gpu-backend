@@ -140,12 +140,9 @@ AI模型: Gemma, Qwen, Qwen3, Qwen2.5, DeepSeek, ChatGPT, GPT, Claude, LLaMA
 原文："我想使用千万二点五和deep sik大模型"
 纠正："我想使用Qwen2.5和DeepSeek大模型"
 
-原文："使用home system控制设备"
-纠正："使用Home Assistant控制设备"
-
 原文：{text}
 
-纠正后：""",
+请直接输出纠正后的文本，不要包含任何前缀或格式标记。""",
 
             "format": f"""请将以下文本格式化为正式的书面语：
 1. 保持原意不变
@@ -301,7 +298,7 @@ AI模型: Gemma, Qwen, Qwen3, Qwen2.5, DeepSeek, ChatGPT, GPT, Claude, LLaMA
                             {"role": "system", "content": f"你是一个专业的翻译助手，擅长{source_lang}到{target_lang}的翻译。"},
                             {"role": "user", "content": prompt}
                         ],
-                        "temperature": 0.7,  # 翻译使用较低temperature保证准确性
+                        "temperature": 0.3,  # 翻译使用较低temperature保证准确性
                         "stream": False,
                         "think": False,
                         "options": {
